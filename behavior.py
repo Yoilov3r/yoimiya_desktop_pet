@@ -1,0 +1,249 @@
+from __future__ import annotations
+
+import json
+import random
+from collections import deque
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Mapping, Sequence
+
+
+def clamp(value: float, minimum: float = 0.0, maximum: float = 1.0) -> float:
+    return max(minimum, min(maximum, value))
+
+
+@dataclass
+class PetNeeds:
+    energy: float = 0.82
+    mood: float = 0.78
+    fullness: float = 0.72
+    focus: float = 0.66
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object] | None) -> "PetNeeds":
+        if not data:
+            return cls()
+        values: dict[str, float] = {}
+        for field in ("energy", "mood", "fullness", "focus"):
+            raw = data.get(field, getattr(cls(), field))
+            try:
+                values[field] = clamp(float(raw))
+            except (TypeError, ValueError):
+                values[field] = getattr(cls(), field)
+        return cls(**values)
+
+    def to_dict(self) -> dict[str, float]:
+        return asdict(self)
+
+    def update(self, seconds: float, action_key: str, period: str) -> None:
+        seconds = max(0.0, min(seconds, 5.0))
+        self.energy -= seconds * 0.00035
+        self.fullness -= seconds * 0.00020
+        self.focus -= seconds * 0.00012
+
+        if action_key == "study":
+            self.focus += seconds * 0.0018
+            self.energy -= seconds * 0.00055
+        elif action_key == "eat":
+            self.fullness += seconds * 0.0042
+            self.mood += seconds * 0.0006
+        elif action_key == "sleep":
+            self.energy += seconds * 0.0032
+        elif action_key in {"cheer", "welcome"}:
+            self.mood += seconds * 0.0008
+        elif action_key == "daydream":
+            self.mood += seconds * 0.00035
+            self.focus -= seconds * 0.00020
+
+        if period == "night" and action_key != "sleep":
+            self.energy -= seconds * 0.00035
+
+        self.energy = clamp(self.energy)
+        self.mood = clamp(self.mood)
+        self.fullness = clamp(self.fullness)
+        self.focus = clamp(self.focus)
+
+    def important_note(self, action_key: str) -> str | None:
+        if self.energy < 0.20:
+            return "energy"
+        if self.fullness < 0.18:
+            return "hungry"
+        if self.mood < 0.18:
+            return "mood"
+        if action_key == "study" and self.focus < 0.20:
+            return "focus"
+        return None
+
+    def action_modifier(self, action_key: str, period: str) -> float:
+        modifier = 1.0
+        if self.energy < 0.30:
+            modifier *= {"sleep": 4.8, "eat": 1.8, "study": 0.25, "cheer": 0.45}.get(action_key, 1.0)
+        if self.fullness < 0.25:
+            modifier *= {"eat": 4.5, "study": 0.55, "daydream": 0.75}.get(action_key, 1.0)
+        if self.mood < 0.28:
+            modifier *= {"welcome": 2.2, "cheer": 2.0, "eat": 1.5, "sleep": 1.3}.get(action_key, 0.8)
+        if self.focus > 0.78 and action_key == "study":
+            modifier *= 1.6
+        if period == "night":
+            modifier *= {"sleep": 3.0, "idle": 1.2, "study": 0.45, "cheer": 0.55}.get(action_key, 1.0)
+        return modifier
+
+
+class DialogueEngine:
+    def __init__(
+        self,
+        defaults: Mapping[str, Sequence[str]],
+        custom_path: Path,
+        greeting_lines: Mapping[str, Sequence[str]] | None = None,
+    ) -> None:
+        self.defaults = {key: list(lines) for key, lines in defaults.items()}
+        self.greeting_lines = {
+            key: list(lines) for key, lines in (greeting_lines or {}).items()
+        }
+        self.custom_path = custom_path
+        self.custom: dict[str, list[str]] = {}
+        self.recent: deque[str] = deque(maxlen=10)
+        self.reload()
+
+    def reload(self) -> None:
+        if not self.custom_path.exists():
+            self.write_template()
+        try:
+            raw = json.loads(self.custom_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            self.custom = {}
+            return
+
+        if not isinstance(raw, dict):
+            self.custom = {}
+            return
+        self.custom = {
+            str(key): [str(line) for line in value if str(line).strip()]
+            for key, value in raw.items()
+            if isinstance(value, list)
+        }
+
+    def write_template(self) -> None:
+        if self.custom_path.exists():
+            return
+        self.custom_path.parent.mkdir(parents=True, exist_ok=True)
+        template = {
+            "idle": ["这是我自己的待机台词。"],
+            "study": ["自定义学习台词示例。"],
+            "eat": ["自定义吃饭台词示例。"],
+            "daydream": ["自定义发呆台词示例。"],
+            "cheer": ["自定义欢呼台词示例。"],
+            "welcome": ["自定义问候台词示例。"],
+            "sleep": ["自定义打盹台词示例。"],
+            "head": ["自定义摸头反应示例。"],
+            "body": ["自定义身体互动示例。"],
+            "hand": ["自定义牵手或击掌反应示例。"],
+        }
+        self.custom_path.write_text(
+            json.dumps(template, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def _context_candidates(
+        self,
+        action_key: str,
+        period: str,
+        needs: PetNeeds,
+        extra_context: Sequence[str],
+    ) -> list[str]:
+        note = needs.important_note(action_key)
+        context: dict[str, list[str]] = {
+            "energy": [
+                "眼皮有点重了……我稍微休息一下就好。",
+                "精力快见底啦，先让我缓一小会儿。",
+            ],
+            "hungry": [
+                "肚子在提醒我该吃点东西了。",
+                "还有点心吗？一点点就好。",
+            ],
+            "mood": [
+                "今天好像有点提不起精神……陪我说说话吧。",
+                "唔，心情需要一点金色火花。",
+            ],
+            "focus": [
+                "看了好久，脑袋开始打结了。",
+                "先合上书，让思路透透气。",
+            ],
+        }
+        lines: list[str] = []
+        if note:
+            lines.extend(context[note])
+        if period == "night" and action_key not in {"sleep", "welcome"}:
+            lines.append("夜深了，我会把声音放轻一点。")
+        lines.extend(str(line) for line in extra_context if str(line).strip())
+        return lines
+
+    def pick(
+        self,
+        action_key: str,
+        period: str,
+        needs: PetNeeds,
+        extra_context: Sequence[str] = (),
+    ) -> str:
+        candidates: list[str] = []
+        candidates.extend(self.custom.get(action_key, []))
+        candidates.extend(self.defaults.get(action_key, []))
+        if not candidates:
+            candidates.extend(self.custom.get("idle", []))
+            candidates.extend(self.defaults.get("idle", []))
+
+        if action_key == "welcome" and period in self.greeting_lines:
+            candidates = list(self.greeting_lines[period]) + candidates
+
+        if needs.important_note(action_key) or period == "night" or extra_context:
+            candidates = self._context_candidates(
+                action_key,
+                period,
+                needs,
+                extra_context,
+            ) + candidates
+
+        fresh = [line for line in candidates if line not in self.recent]
+        pool = fresh or candidates
+        if len(pool) > 1 and self.recent:
+            pool = [line for line in pool if line != self.recent[-1]]
+        if not pool:
+            return "……"
+        line = random.choice(pool)
+        self.recent.append(line)
+        return line
+
+    def interaction_line(
+        self,
+        region: str,
+        period: str,
+        needs: PetNeeds,
+        extra_context: Sequence[str] = (),
+    ) -> str:
+        region_defaults: dict[str, list[str]] = {
+            "head": [
+                "嘿嘿……头发会被你弄乱的。",
+                "摸头许可，只限今天一小会儿。",
+                "再摸一下，我就当成是在鼓励我啦。",
+            ],
+            "body": [
+                "叫我有什么事吗？",
+                "我一直都在认真看着桌面哦。",
+                "今天也一起找点有趣的事吧。",
+            ],
+            "hand": [
+                "击掌！今天也要顺顺利利。",
+                "抓住我的手，是要一起去放烟花吗？",
+                "好，给你一点小小的好运气。",
+            ],
+        }
+        candidates = self.custom.get(region, []) + region_defaults.get(region, [])
+        context = self._context_candidates(region, period, needs, extra_context)
+        pool = context + candidates
+        fresh = [line for line in pool if line not in self.recent]
+        pool = fresh or pool
+        if len(pool) > 1 and self.recent:
+            pool = [line for line in pool if line != self.recent[-1]]
+        line = random.choice(pool)
+        self.recent.append(line)
+        return line
