@@ -136,7 +136,8 @@ class ControlPanel(tk.Toplevel):
             "padx": 10,
             "pady": 6,
         }
-        tk.Button(actions, text="投喂", command=self.pet.feed, **button_style).pack(side="left", padx=(0, 6))
+        tk.Button(actions, text="点心", command=self.pet.feed, **button_style).pack(side="left", padx=(0, 6))
+        tk.Button(actions, text="饮水", command=self.pet.drink, **button_style).pack(side="left", padx=6)
         tk.Button(actions, text="休息", command=lambda: self.pet.manual_action("sleep"), **button_style).pack(side="left", padx=6)
         tk.Button(actions, text="烟花", command=self.pet.start_fireworks_game, **button_style).pack(side="left", padx=6)
         tk.Button(
@@ -273,10 +274,13 @@ class ControlPanel(tk.Toplevel):
         game = "进行中" if self.pet.game_active else "未开始"
         system = self.pet.last_system_note or "状态正常"
         self.status_var.set(
-            f"精力 {needs.energy:.0%}   心情 {needs.mood:.0%}   "
-            f"饱腹 {needs.fullness:.0%}   专注 {needs.focus:.0%}\n"
-            f"互动次数 {self.pet.interaction_count}   烟花游戏 {game}\n"
-            f"系统：{system}"
+            f"Lv.{needs.level}   好感 {needs.affection:.0%}   "
+            f"心情 {needs.mood:.0%}   精力 {needs.energy:.0%}\n"
+            f"饱腹 {needs.fullness:.0%}   专注 {needs.focus:.0%}   "
+            f"清洁 {needs.cleanliness:.0%}   健康 {needs.health:.0%}\n"
+            f"点心 {needs.treats}   饮水 {needs.drinks}   金币 {needs.coins}   "
+            f"互动 {self.pet.interaction_count}\n"
+            f"烟花游戏 {game}   系统：{system}"
         )
         self.after(500, self.refresh)
 

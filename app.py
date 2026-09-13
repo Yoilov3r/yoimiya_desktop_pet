@@ -15,6 +15,7 @@ from tkinter import messagebox
 
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 
+from crash_guard import CrashGuard, acquire_single_instance
 from extra_actions import EXTRA_ACTIONS
 
 
@@ -691,18 +692,30 @@ def main() -> None:
     args = parser.parse_args()
 
     enable_high_dpi()
+    guard = CrashGuard()
+    guard.install()
+    guard.log("main_start")
     if args.preview_dir is not None:
         render_previews(args.preview_dir)
         return
 
+    instance = acquire_single_instance()
+    if instance is None:
+        guard.log("secondary_instance_exit")
+        return
+
     from desktop_pet_v2 import DesktopPetV2
 
-    DesktopPetV2(
-        ACTIONS,
-        GREETING_LINES,
-        demo_seconds=args.demo_seconds,
-        autostart=args.autostart,
-    ).run()
+    try:
+        DesktopPetV2(
+            ACTIONS,
+            GREETING_LINES,
+            demo_seconds=args.demo_seconds,
+            autostart=args.autostart,
+        ).run()
+    except Exception as error:
+        guard.log_error("main", error)
+        raise
 
 
 if __name__ == "__main__":

@@ -17,6 +17,7 @@ from PIL import Image, ImageFilter, ImageTk
 
 from behavior import DialogueEngine, PetNeeds
 from control_panel import ControlPanel
+from crash_guard import CrashGuard
 from particles import ParticleSystem, draw_seasonal_ambient
 from reminders import ReminderManager
 from rendering import (
@@ -68,6 +69,9 @@ class DesktopPetV2:
         self.had_saved_position = "x" in self.settings and "y" in self.settings
 
         self.root = tk.Tk()
+        self.crash_guard = CrashGuard(self.root)
+        self.crash_guard.install()
+        self.crash_guard.log(f"startup pid={os.getpid()} frozen={bool(getattr(sys, '_MEIPASS', None))}")
         self.root.title("宵宫桌宠")
         try:
             self.root.iconbitmap(str(resource_path("assets", "poses", "pet.ico")))
@@ -250,6 +254,8 @@ class DesktopPetV2:
     def build_menu(self) -> tk.Menu:
         menu = tk.Menu(self.root, tearoff=False, font=("Microsoft YaHei UI", 10))
         menu.add_command(label="打开控制中心", command=self.open_control_center)
+        menu.add_command(label="给点点心", command=self.feed)
+        menu.add_command(label="喝口水", command=self.drink)
         menu.add_command(label="烟花小游戏", command=self.start_fireworks_game)
         menu.add_separator()
         for key in (
@@ -272,6 +278,7 @@ class DesktopPetV2:
         menu.add_separator()
         menu.add_command(label="随机行动", command=self.random_action)
         menu.add_command(label="说句话", command=lambda: self.speak(self.click_line()))
+        menu.add_command(label="查看成长", command=self.show_growth)
         menu.add_command(label="编辑自定义台词", command=self.open_dialogue_file)
         menu.add_command(label="重新载入台词", command=self.reload_dialogues)
         menu.add_separator()
@@ -558,26 +565,29 @@ class DesktopPetV2:
         return scene
 
     def draw(self) -> None:
-        scene = self.render_scene()
-        keyed = Image.new("RGB", scene.size, TRANSPARENT_RGB)
-        keyed.paste(scene, mask=scene.getchannel("A"))
-        if (
-            self.photo is None
-            or self.photo.width() != keyed.width
-            or self.photo.height() != keyed.height
-        ):
-            self.photo = ImageTk.PhotoImage(keyed)
-            if self.canvas_item is None:
-                self.canvas_item = self.canvas.create_image(
-                    0,
-                    0,
-                    anchor="nw",
-                    image=self.photo,
-                )
+        try:
+            scene = self.render_scene()
+            keyed = Image.new("RGB", scene.size, TRANSPARENT_RGB)
+            keyed.paste(scene, mask=scene.getchannel("A"))
+            if (
+                self.photo is None
+                or self.photo.width() != keyed.width
+                or self.photo.height() != keyed.height
+            ):
+                self.photo = ImageTk.PhotoImage(keyed)
+                if self.canvas_item is None:
+                    self.canvas_item = self.canvas.create_image(
+                        0,
+                        0,
+                        anchor="nw",
+                        image=self.photo,
+                    )
+                else:
+                    self.canvas.itemconfigure(self.canvas_item, image=self.photo)
             else:
-                self.canvas.itemconfigure(self.canvas_item, image=self.photo)
-        else:
-            self.photo.paste(keyed)
+                self.photo.paste(keyed)
+        except Exception as error:
+            self.crash_guard.log_error("draw", error)
 
     def check_system_state(self) -> None:
         fullscreen = self.system.is_fullscreen()
@@ -597,6 +607,13 @@ class DesktopPetV2:
         )
 
     def tick(self) -> None:
+        try:
+            self._tick_once()
+        except Exception as error:
+            self.crash_guard.log_error("tick", error)
+            self.root.after(max(60, self.motion_interval), self.tick)
+
+    def _tick_once(self) -> None:
         tick_started = time.perf_counter()
         now = time.monotonic()
         delta = max(0.0, min(1.0, now - self.last_tick_at))
@@ -640,6 +657,9 @@ class DesktopPetV2:
         if not self.hidden_by_fullscreen and not self.dragging:
             self.draw()
 
+        if self.frame % max(600, round(60_000 / max(16, self.motion_interval))) == 0:
+            self.save_settings()
+
         interval = self.motion_interval
         if self.system_low_power:
             interval = max(interval, 120)
@@ -679,10 +699,18 @@ class DesktopPetV2:
     def random_action(self) -> None:
         period = self.current_time_period()
         choices = [action for action in self.actions.values() if action.key != self.current_action.key]
-        weights = [
-            action.weight * self.needs.action_modifier(action.key, period)
-            for action in choices
-        ]
+        weights: list[float] = []
+        for action in choices:
+            weight = action.weight * self.needs.action_modifier(action.key, period)
+            if action.key == "shy" and self.needs.affection > 0.55:
+                weight *= 1.8
+            elif action.key == "stretch" and self.needs.energy < 0.50:
+                weight *= 1.7
+            elif action.key == "look_fireworks" and period in {"evening", "night"}:
+                weight *= 2.0
+            elif action.key == "eat" and self.needs.fullness < 0.35:
+                weight *= 2.2
+            weights.append(weight)
         action = random.choices(choices, weights=weights, k=1)[0]
         self.session_started = datetime.now()
         line = self.dialogue.pick(
@@ -694,12 +722,42 @@ class DesktopPetV2:
         self.change_action(action.key, line)
 
     def feed(self) -> None:
-        self.needs.fullness = min(1.0, self.needs.fullness + 0.42)
-        self.needs.mood = min(1.0, self.needs.mood + 0.10)
+        if not self.needs.use_treat():
+            self.show_expression("sweat_drop", 0.8)
+            self.speak("点心吃完啦，下次再一起去补货吧。", 4.0)
+            return
         self.particles.emit(BASE_WIDTH * 0.66, BASE_HEIGHT * 0.72, 18, 68)
-        self.manual_action("eat")
-        self.speak("好吃！感觉又能继续做很多事了。", 4.0)
+        self.change_action(
+            "eat",
+            "好吃！感觉又能继续做很多事了。",
+        )
+        self.show_expression("heart_blush", 1.0)
         self.save_settings()
+
+    def drink(self) -> None:
+        if not self.needs.use_drink():
+            self.show_expression("sweat_drop", 0.8)
+            self.speak("水也喝完啦，要记得补充库存。", 4.0)
+            return
+        self.particles.emit(BASE_WIDTH * 0.68, BASE_HEIGHT * 0.67, 10, 42)
+        self.change_action("welcome", "咕嘟咕嘟……感觉清爽多了。")
+        self.show_expression("spark_cluster", 0.8)
+        self.save_settings()
+
+    def show_growth(self) -> None:
+        level = self.needs.level
+        messagebox.showinfo(
+            "宵宫成长记录",
+            f"等级：Lv.{level}\n"
+            f"经验：{self.needs.experience:.0f}\n"
+            f"好感度：{self.needs.affection:.0%}\n"
+            f"心情：{self.needs.mood:.0%}\n"
+            f"清洁度：{self.needs.cleanliness:.0%}\n"
+            f"健康：{self.needs.health:.0%}\n"
+            f"金币：{self.needs.coins}\n"
+            f"点心：{self.needs.treats}   饮水：{self.needs.drinks}",
+            parent=self.root,
+        )
 
     def start_fireworks_game(self) -> None:
         self.game_active = True
@@ -725,7 +783,13 @@ class DesktopPetV2:
             self.game_active = False
             self.particles.emit(BASE_WIDTH * 0.5, BASE_HEIGHT * 0.48, 42, 112)
             self.manual_action("cheer")
-            self.speak("完成！这一朵金色烟花送给你。", 5.0)
+            self.needs.experience += 12
+            self.needs.coins += 2
+            self.needs.affection = min(1.0, self.needs.affection + 0.02)
+            self.speak(
+                f"完成！这一朵金色烟花送给你。现在达到 Lv.{self.needs.level} 了。",
+                5.0,
+            )
             self.save_settings()
 
     def update_wander(self, now: float) -> None:
@@ -877,6 +941,15 @@ class DesktopPetV2:
             "accessory": 0.035,
         }.get(region, 0.018)
         self.needs.mood = min(1.0, self.needs.mood + mood_gain)
+        previous_level = self.needs.level
+        self.needs.register_interaction(region)
+        if self.needs.level > previous_level:
+            self.show_expression("flower_burst", 1.2)
+            self.particles.emit(BASE_WIDTH * 0.5, BASE_HEIGHT * 0.42, 28, 86)
+            self.speak(
+                f"好感成长到 Lv.{self.needs.level} 啦！我会继续陪着你的。",
+                5.0,
+            )
         self.particles.emit(
             BASE_WIDTH * (0.72 if region == "hand" else 0.52),
             BASE_HEIGHT * (0.7 if region == "hand" else 0.4),
@@ -1028,6 +1101,7 @@ class DesktopPetV2:
 
     def quit(self) -> None:
         self.save_settings()
+        self.crash_guard.log("normal_exit")
         if self.control_panel is not None and self.control_panel.winfo_exists():
             self.control_panel.destroy()
         self.root.destroy()

@@ -18,16 +18,38 @@ class PetNeeds:
     mood: float = 0.78
     fullness: float = 0.72
     focus: float = 0.66
+    affection: float = 0.12
+    experience: float = 0.0
+    cleanliness: float = 0.94
+    health: float = 0.90
+    coins: int = 0
+    treats: int = 5
+    drinks: int = 5
 
     @classmethod
     def from_dict(cls, data: Mapping[str, object] | None) -> "PetNeeds":
         if not data:
             return cls()
         values: dict[str, float] = {}
-        for field in ("energy", "mood", "fullness", "focus"):
+        for field in (
+            "energy",
+            "mood",
+            "fullness",
+            "focus",
+            "affection",
+            "experience",
+            "cleanliness",
+            "health",
+        ):
             raw = data.get(field, getattr(cls(), field))
             try:
                 values[field] = clamp(float(raw))
+            except (TypeError, ValueError):
+                values[field] = getattr(cls(), field)
+        for field in ("coins", "treats", "drinks"):
+            raw = data.get(field, getattr(cls(), field))
+            try:
+                values[field] = max(0, int(raw))
             except (TypeError, ValueError):
                 values[field] = getattr(cls(), field)
         return cls(**values)
@@ -40,6 +62,7 @@ class PetNeeds:
         self.energy -= seconds * 0.00035
         self.fullness -= seconds * 0.00020
         self.focus -= seconds * 0.00012
+        self.cleanliness -= seconds * 0.00008
 
         if action_key == "study":
             self.focus += seconds * 0.0018
@@ -58,10 +81,68 @@ class PetNeeds:
         if period == "night" and action_key != "sleep":
             self.energy -= seconds * 0.00035
 
+        if self.fullness < 0.18:
+            self.health -= seconds * 0.00035
+        elif self.fullness > 0.55 and self.energy > 0.35:
+            self.health += seconds * 0.00008
+        if self.cleanliness < 0.20:
+            self.mood -= seconds * 0.00025
+
         self.energy = clamp(self.energy)
         self.mood = clamp(self.mood)
         self.fullness = clamp(self.fullness)
         self.focus = clamp(self.focus)
+        self.affection = clamp(self.affection)
+        self.cleanliness = clamp(self.cleanliness)
+        self.health = clamp(self.health)
+
+    @property
+    def level(self) -> int:
+        return 1 + int(self.experience // 100)
+
+    @property
+    def level_progress(self) -> float:
+        return (self.experience % 100) / 100
+
+    def register_interaction(self, region: str) -> None:
+        affection_gain = {
+            "face": 0.026,
+            "hair": 0.015,
+            "hand": 0.020,
+            "accessory": 0.018,
+            "outfit": 0.014,
+        }.get(region, 0.012)
+        self.affection = clamp(self.affection + affection_gain)
+        self.experience += 2 + (1 if region in {"face", "hand"} else 0)
+        if random.random() < 0.12:
+            self.coins += 1
+
+    def use_treat(self) -> bool:
+        if self.treats <= 0:
+            return False
+        self.treats -= 1
+        self.fullness = clamp(self.fullness + 0.38)
+        self.mood = clamp(self.mood + 0.10)
+        self.health = clamp(self.health + 0.04)
+        self.affection = clamp(self.affection + 0.015)
+        self.experience += 4
+        return True
+
+    def use_drink(self) -> bool:
+        if self.drinks <= 0:
+            return False
+        self.drinks -= 1
+        self.fullness = clamp(self.fullness + 0.08)
+        self.health = clamp(self.health + 0.02)
+        self.cleanliness = clamp(self.cleanliness - 0.01)
+        self.experience += 2
+        return True
+
+    def status_summary(self) -> str:
+        return (
+            f"Lv.{self.level}  好感 {self.affection:.0%}  "
+            f"心情 {self.mood:.0%}  精力 {self.energy:.0%}"
+        )
 
     def important_note(self, action_key: str) -> str | None:
         if self.energy < 0.20:
