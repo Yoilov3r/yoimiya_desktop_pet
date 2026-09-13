@@ -8,7 +8,7 @@ import random
 import sys
 import time
 import tkinter as tk
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox
@@ -100,6 +100,7 @@ class DesktopPetV2:
         self.drag_origin: tuple[int, int] | None = None
         self.window_origin: tuple[int, int] | None = None
         self.dragging = False
+        self.drag_started_at = 0.0
         self.click_job: str | None = None
         self.press_region = "body"
         self.press_position = (BASE_WIDTH // 2, BASE_HEIGHT // 2)
@@ -127,6 +128,7 @@ class DesktopPetV2:
             {key: action.lines for key, action in actions.items()},
             data_path("custom_dialogues.json"),
             greetings,
+            builtin_path=resource_path("assets", "dialogues.json"),
         )
         self.system = SystemAwareness()
         self.particles = ParticleSystem()
@@ -134,6 +136,10 @@ class DesktopPetV2:
 
         self.photo: ImageTk.PhotoImage | None = None
         self.canvas_item: int | None = None
+        self.expression_cache: dict[str, Image.Image] = {}
+        self.active_expression: str | None = None
+        self.expression_until = 0.0
+        self.click_times: deque[float] = deque(maxlen=5)
         self.pose_cache: dict[str, Image.Image] = {}
         self.scaled_pose_cache: OrderedDict[tuple, Image.Image] = OrderedDict()
         self.bubble_cache: OrderedDict[tuple, tuple[Image.Image, int]] = OrderedDict()
@@ -246,7 +252,18 @@ class DesktopPetV2:
         menu.add_command(label="打开控制中心", command=self.open_control_center)
         menu.add_command(label="烟花小游戏", command=self.start_fireworks_game)
         menu.add_separator()
-        for key in ("welcome", "study", "daydream", "eat", "cheer", "sleep", "idle"):
+        for key in (
+            "welcome",
+            "study",
+            "daydream",
+            "eat",
+            "cheer",
+            "sleep",
+            "stretch",
+            "shy",
+            "look_fireworks",
+            "idle",
+        ):
             action = self.actions[key]
             menu.add_command(
                 label=f"{action.label}一下",
@@ -404,6 +421,17 @@ class DesktopPetV2:
             self.accessory_cache.popitem(last=False)
         return layer
 
+    def load_expression(self, name: str) -> Image.Image:
+        if name not in self.expression_cache:
+            path = resource_path("assets", "effects", f"{name}.png")
+            self.expression_cache[name] = Image.open(path).convert("RGBA")
+        return self.expression_cache[name]
+
+    def show_expression(self, name: str, seconds: float = 0.85) -> None:
+        self.active_expression = name
+        self.expression_until = time.monotonic() + seconds
+        self.accessory_cache.clear()
+
     def current_time_period(self) -> str:
         hour = datetime.now().hour
         if 5 <= hour < 12:
@@ -428,10 +456,16 @@ class DesktopPetV2:
         width, height = self.window_size()
         normalized_x = x / max(1, width)
         normalized_y = y / max(1, height)
-        if 0.15 <= normalized_x <= 0.86 and normalized_y <= 0.62:
-            return "head"
-        if normalized_x >= 0.62 and normalized_y >= 0.48:
+        if normalized_y <= 0.27 and 0.12 <= normalized_x <= 0.90:
+            return "hair"
+        if 0.27 < normalized_y <= 0.58 and 0.18 <= normalized_x <= 0.82:
+            return "face"
+        if normalized_x >= 0.68 and normalized_y >= 0.46:
             return "hand"
+        if normalized_x <= 0.30 and normalized_y >= 0.48:
+            return "accessory"
+        if normalized_y >= 0.76:
+            return "outfit"
         return "body"
 
     def click_line(self, region: str = "body") -> str:
@@ -494,6 +528,30 @@ class DesktopPetV2:
                 height,
             )
         )
+        if self.active_expression and time.monotonic() < self.expression_until:
+            effect = self.load_expression(self.active_expression)
+            effect_size = max(80, round(230 * self.scale))
+            effect = effect.resize((effect_size, effect_size), Image.Resampling.LANCZOS)
+            positions = {
+                "heart_blush": (0.51, 0.43),
+                "spark_cluster": (0.62, 0.35),
+                "music_notes": (0.58, 0.34),
+                "sweat_drop": (0.66, 0.27),
+                "anger_mark": (0.65, 0.28),
+                "question_mark": (0.65, 0.31),
+                "firework": (0.62, 0.27),
+                "flower_burst": (0.55, 0.40),
+            }
+            position_x, position_y = positions.get(self.active_expression, (0.60, 0.32))
+            scene.alpha_composite(
+                effect,
+                (
+                    round(width * position_x - effect_size / 2),
+                    round(height * position_y - effect_size / 2),
+                ),
+            )
+        elif self.active_expression:
+            self.active_expression = None
         if self.seasonal_effects:
             draw_seasonal_ambient(scene, self.frame, self.scale)
         self.particles.draw(scene, self.scale)
@@ -717,6 +775,7 @@ class DesktopPetV2:
         self.press_position = (event.x, event.y)
         self.press_region = self.classify_region(event.x, event.y)
         self.dragging = False
+        self.drag_started_at = time.monotonic()
         self.last_user_activity = time.monotonic()
         self.wander_target = None
 
@@ -751,6 +810,19 @@ class DesktopPetV2:
             if self.drag_target is not None:
                 self.position = self.drag_target
             self.place_window()
+            drag_duration = time.monotonic() - self.drag_started_at
+            if drag_duration > 0.55 and random.random() < 0.42:
+                self.show_expression(
+                    random.choice(("sweat_drop", "question_mark", "anger_mark")),
+                    0.9,
+                )
+                self.speak(
+                    self.dialogue.pick(
+                        "drag",
+                        self.current_time_period(),
+                        self.needs,
+                    )
+                )
             self.save_settings()
             self.dragging = False
             self.drag_target = None
@@ -765,12 +837,52 @@ class DesktopPetV2:
     def single_click(self) -> None:
         self.click_job = None
         region = self.press_region
-        if region == "head":
-            self.needs.mood = min(1.0, self.needs.mood + 0.035)
-            self.particles.emit(BASE_WIDTH * 0.49, BASE_HEIGHT * 0.42, 8, 42)
-        elif region == "hand":
-            self.needs.mood = min(1.0, self.needs.mood + 0.02)
-            self.particles.emit(BASE_WIDTH * 0.74, BASE_HEIGHT * 0.72, 8, 48)
+        now = time.monotonic()
+        self.click_times.append(now)
+        rapid = (
+            len(self.click_times) >= 3
+            and now - self.click_times[0] <= 1.45
+        )
+        if rapid:
+            self.click_times.clear()
+            self.needs.mood = max(0.0, self.needs.mood - 0.015)
+            self.show_expression("anger_mark", 0.75)
+            self.particles.emit(BASE_WIDTH * 0.62, BASE_HEIGHT * 0.34, 9, 44)
+            self.speak(
+                self.dialogue.interaction_line(
+                    "rapid",
+                    self.current_time_period(),
+                    self.needs,
+                    self.context_lines(),
+                )
+            )
+            self.save_settings()
+            return
+
+        effects = {
+            "hair": "spark_cluster",
+            "face": "heart_blush",
+            "accessory": "music_notes",
+            "outfit": "question_mark",
+            "hand": "spark_cluster",
+            "body": "flower_burst",
+        }
+        effect = effects.get(region)
+        if effect:
+            self.show_expression(effect, 0.85)
+        mood_gain = {
+            "face": 0.05,
+            "hair": 0.025,
+            "hand": 0.03,
+            "accessory": 0.035,
+        }.get(region, 0.018)
+        self.needs.mood = min(1.0, self.needs.mood + mood_gain)
+        self.particles.emit(
+            BASE_WIDTH * (0.72 if region == "hand" else 0.52),
+            BASE_HEIGHT * (0.7 if region == "hand" else 0.4),
+            9,
+            48,
+        )
         self.speak(self.click_line(region))
         self.save_settings()
 

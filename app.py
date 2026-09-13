@@ -15,6 +15,8 @@ from tkinter import messagebox
 
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 
+from extra_actions import EXTRA_ACTIONS
+
 
 APP_NAME = "YoimiyaDesktopPet"
 BASE_WIDTH = 400
@@ -129,6 +131,17 @@ ACTIONS = {
         weight=1,
     ),
 }
+
+
+for _action_key, _action_spec in EXTRA_ACTIONS.items():
+    ACTIONS[_action_key] = PetAction(
+        _action_key,
+        _action_spec["label"],
+        _action_spec["pose"],
+        _action_spec["lines"],
+        _action_spec["duration"],
+        weight=_action_spec["weight"],
+    )
 
 
 GREETING_LINES = {

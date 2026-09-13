@@ -9,7 +9,7 @@ python -m PyInstaller `
     --windowed `
     --name "YoimiyaDesktopPet" `
     --icon "assets\poses\pet.ico" `
-    --add-data "assets\poses;assets\poses" `
+    --add-data "assets;assets" `
     "app.py"
 
 Write-Host ""

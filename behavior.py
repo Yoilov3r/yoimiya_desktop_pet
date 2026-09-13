@@ -95,15 +95,55 @@ class DialogueEngine:
         defaults: Mapping[str, Sequence[str]],
         custom_path: Path,
         greeting_lines: Mapping[str, Sequence[str]] | None = None,
+        builtin_path: Path | None = None,
     ) -> None:
         self.defaults = {key: list(lines) for key, lines in defaults.items()}
         self.greeting_lines = {
             key: list(lines) for key, lines in (greeting_lines or {}).items()
         }
         self.custom_path = custom_path
+        self.builtin_path = builtin_path
+        self.bags: dict[str, deque[str]] = {}
         self.custom: dict[str, list[str]] = {}
-        self.recent: deque[str] = deque(maxlen=10)
+        self.recent: deque[str] = deque(maxlen=28)
+        self.load_builtin()
         self.reload()
+
+    @staticmethod
+    def is_placeholder(line: str) -> bool:
+        return "示例" in line or "自定义" in line
+
+    def load_builtin(self) -> None:
+        if self.builtin_path is None or not self.builtin_path.exists():
+            return
+        try:
+            raw = json.loads(self.builtin_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return
+        if not isinstance(raw, dict):
+            return
+        dialogues = raw.get("dialogues", raw)
+        if not isinstance(dialogues, dict):
+            return
+        for key, lines in dialogues.items():
+            if not isinstance(lines, list):
+                continue
+            clean = [str(line) for line in lines if str(line).strip() and not self.is_placeholder(str(line))]
+            if not clean:
+                continue
+            if key in self.greeting_lines:
+                self.greeting_lines[key].extend(clean)
+            else:
+                self.defaults.setdefault(str(key), []).extend(clean)
+        greetings = raw.get("greetings")
+        if isinstance(greetings, dict):
+            for key, lines in greetings.items():
+                if isinstance(lines, list):
+                    self.greeting_lines.setdefault(str(key), []).extend(
+                        str(line)
+                        for line in lines
+                        if str(line).strip() and not self.is_placeholder(str(line))
+                    )
 
     def reload(self) -> None:
         if not self.custom_path.exists():
@@ -122,22 +162,44 @@ class DialogueEngine:
             for key, value in raw.items()
             if isinstance(value, list)
         }
+        cleaned: dict[str, list[str]] = {}
+        changed = False
+        for key, lines in self.custom.items():
+            clean = [line for line in lines if not self.is_placeholder(line)]
+            if clean != lines:
+                changed = True
+            cleaned[key] = clean
+        self.custom = cleaned
+        if changed:
+            self.custom_path.write_text(
+                json.dumps(self.custom, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
 
     def write_template(self) -> None:
         if self.custom_path.exists():
             return
         self.custom_path.parent.mkdir(parents=True, exist_ok=True)
         template = {
-            "idle": ["这是我自己的待机台词。"],
-            "study": ["自定义学习台词示例。"],
-            "eat": ["自定义吃饭台词示例。"],
-            "daydream": ["自定义发呆台词示例。"],
-            "cheer": ["自定义欢呼台词示例。"],
-            "welcome": ["自定义问候台词示例。"],
-            "sleep": ["自定义打盹台词示例。"],
-            "head": ["自定义摸头反应示例。"],
-            "body": ["自定义身体互动示例。"],
-            "hand": ["自定义牵手或击掌反应示例。"],
+            "idle": [],
+            "study": [],
+            "eat": [],
+            "daydream": [],
+            "cheer": [],
+            "welcome": [],
+            "sleep": [],
+            "head": [],
+            "hair": [],
+            "face": [],
+            "accessory": [],
+            "outfit": [],
+            "body": [],
+            "hand": [],
+            "drag": [],
+            "rapid": [],
+            "stretch": [],
+            "look_fireworks": [],
+            "shy": [],
         }
         self.custom_path.write_text(
             json.dumps(template, ensure_ascii=False, indent=2),
@@ -203,13 +265,25 @@ class DialogueEngine:
                 extra_context,
             ) + candidates
 
-        fresh = [line for line in candidates if line not in self.recent]
-        pool = fresh or candidates
-        if len(pool) > 1 and self.recent:
-            pool = [line for line in pool if line != self.recent[-1]]
-        if not pool:
+        return self.choose_nonrepeating(action_key, candidates)
+
+    def choose_nonrepeating(self, bag_key: str, candidates: Sequence[str]) -> str:
+        unique = list(dict.fromkeys(line for line in candidates if line.strip()))
+        if not unique:
             return "……"
-        line = random.choice(pool)
+
+        bag = self.bags.get(bag_key, deque())
+        bag = deque(line for line in bag if line in unique and line not in self.recent)
+        while bag and bag[0] in self.recent:
+            bag.popleft()
+        if not bag:
+            fresh = [line for line in unique if line not in self.recent]
+            bag = deque(fresh or unique)
+            random.shuffle(bag)
+            while len(bag) > 1 and self.recent and bag[0] == self.recent[-1]:
+                bag.rotate(-1)
+        line = bag.popleft()
+        self.bags[bag_key] = bag
         self.recent.append(line)
         return line
 
@@ -240,10 +314,4 @@ class DialogueEngine:
         candidates = self.custom.get(region, []) + region_defaults.get(region, [])
         context = self._context_candidates(region, period, needs, extra_context)
         pool = context + candidates
-        fresh = [line for line in pool if line not in self.recent]
-        pool = fresh or pool
-        if len(pool) > 1 and self.recent:
-            pool = [line for line in pool if line != self.recent[-1]]
-        line = random.choice(pool)
-        self.recent.append(line)
-        return line
+        return self.choose_nonrepeating(region, pool)

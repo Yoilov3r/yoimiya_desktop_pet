@@ -10,6 +10,7 @@ INK = (91, 47, 37, 255)
 PAPER = (255, 249, 235, 255)
 ORANGE = (232, 95, 45, 255)
 GOLD = (248, 187, 62, 255)
+PINK = (239, 126, 142, 255)
 
 
 def pick_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
@@ -182,6 +183,37 @@ def draw_accessory(image: Image.Image, action: str, frame: int) -> None:
         pulse = 2 + int((math.sin(frame * 0.08) + 1) * 2)
         draw_sparkle(draw, 315, 323, 10 + pulse, GOLD)
         draw_sparkle(draw, 78, 356, 7 + pulse, ORANGE)
+    elif action == "stretch":
+        pulse = 4 + int((math.sin(frame * 0.07) + 1) * 3)
+        draw_sparkle(draw, 69, 322, 8 + pulse, GOLD)
+        draw_sparkle(draw, 334, 319, 8 + pulse, ORANGE)
+        draw.arc((105, 283, 299, 398), 205, 335, fill=(249, 191, 72, 190), width=3)
+    elif action == "look_fireworks":
+        for index, (x, y, size, color) in enumerate(
+            (
+                (326, 206, 23, GOLD),
+                (351, 173, 12, ORANGE),
+                (289, 171, 9, (97, 174, 216, 230)),
+            )
+        ):
+            drift = math.sin(frame * 0.05 + index) * 3
+            for angle_index in range(8):
+                angle = angle_index * math.tau / 8
+                draw.line(
+                    (
+                        x + drift,
+                        y,
+                        x + drift + math.cos(angle) * size,
+                        y + math.sin(angle) * size,
+                    ),
+                    fill=color,
+                    width=2,
+                )
+    elif action == "shy":
+        pulse = 2 + int((math.sin(frame * 0.08) + 1) * 2)
+        draw.ellipse((152, 346, 188, 365), fill=(246, 144, 153, 125))
+        draw.ellipse((264, 346, 300, 365), fill=(246, 144, 153, 125))
+        draw_sparkle(draw, 330, 242, 8 + pulse, PINK)
 
 
 def draw_blink(image: Image.Image, pose_name: str, frame: int) -> None:
@@ -205,5 +237,15 @@ def draw_hover_hint(image: Image.Image, region: str, frame: int) -> None:
     if region == "head":
         draw_sparkle(draw, 280, 245, 7 + pulse, (255, 211, 92, 215))
         draw_sparkle(draw, 306, 267, 5 + pulse, (244, 126, 70, 210))
+    elif region == "hair":
+        draw_sparkle(draw, 116, 205, 6 + pulse, (255, 210, 91, 215))
+        draw_sparkle(draw, 286, 179, 7 + pulse, (241, 131, 88, 215))
+    elif region == "face":
+        draw_sparkle(draw, 215, 344, 5 + pulse, (240, 126, 145, 220))
+        draw_sparkle(draw, 258, 337, 5 + pulse, (240, 126, 145, 220))
+    elif region == "accessory":
+        draw_sparkle(draw, 82, 369, 6 + pulse, (105, 181, 220, 220))
+    elif region == "outfit":
+        draw_sparkle(draw, 202, 444, 6 + pulse, (249, 180, 72, 220))
     elif region == "hand":
         draw_sparkle(draw, 337, 388, 7 + pulse, (255, 208, 75, 220))
