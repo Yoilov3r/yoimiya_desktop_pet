@@ -2,7 +2,7 @@
 
 一个面向 Windows 的互动桌面小宠物，支持透明窗口、状态成长、上下文对话、系统感知和自动日常。
 
-当前版本：`2.3.0`
+当前版本：`2.4.0`
 
 ## 下载
 
@@ -32,6 +32,14 @@ dist\YoimiyaDesktopPet\YoimiyaDesktopPet.exe
 - 拖动：移动位置
 - 右键：控制中心、烟花小游戏和全部行动
 - 鼠标滚轮：调整大小
+
+## 智能聊天
+
+1. 右键宵宫，选择“填入deepseekAPI KEY”。
+2. 粘贴 DeepSeek API Key，选择“保存并测试”。
+3. 再次右键宵宫，选择“聊天”。
+
+API Key 使用 Windows DPAPI 加密保存在本机，不会写入仓库。聊天历史保存在 `data\chat_history.json`，可以在聊天窗口内清空。
 
 ## 新增系统
 

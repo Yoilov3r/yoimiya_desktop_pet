@@ -16,8 +16,10 @@ from tkinter import messagebox
 from PIL import Image, ImageFilter, ImageTk
 
 from behavior import DialogueEngine, PetNeeds
+from chat_window import APIKeyDialog, ChatWindow
 from control_panel import ControlPanel
 from crash_guard import CrashGuard
+from deepseek_client import DeepSeekClient, SecretStore
 from particles import ParticleSystem, draw_seasonal_ambient
 from reminders import ReminderManager
 from rendering import (
@@ -27,6 +29,7 @@ from rendering import (
     draw_hover_hint,
 )
 from system_awareness import SystemAwareness
+from yoimiya_chat import YoimiyaChat
 
 
 APP_NAME = "YoimiyaDesktopPet"
@@ -137,6 +140,12 @@ class DesktopPetV2:
         self.system = SystemAwareness()
         self.particles = ParticleSystem()
         self.reminders = ReminderManager(self.water_minutes, self.reminders_enabled)
+        self.deepseek_client = DeepSeekClient(SecretStore(data_path("deepseek_api.bin")))
+        self.yoimiya_chat = YoimiyaChat(
+            self.deepseek_client,
+            data_path("chat_history.json"),
+        )
+        self.chat_window: ChatWindow | None = None
 
         self.photo: ImageTk.PhotoImage | None = None
         self.canvas_item: int | None = None
@@ -253,6 +262,9 @@ class DesktopPetV2:
 
     def build_menu(self) -> tk.Menu:
         menu = tk.Menu(self.root, tearoff=False, font=("Microsoft YaHei UI", 10))
+        menu.add_command(label="聊天", command=self.open_chat)
+        menu.add_command(label="填入deepseekAPI KEY", command=self.configure_api_key)
+        menu.add_separator()
         menu.add_command(label="打开控制中心", command=self.open_control_center)
         menu.add_command(label="给点点心", command=self.feed)
         menu.add_command(label="喝口水", command=self.drink)
@@ -759,6 +771,44 @@ class DesktopPetV2:
             parent=self.root,
         )
 
+    def open_chat(self) -> None:
+        if self.chat_window is not None and self.chat_window.winfo_exists():
+            self.chat_window.lift()
+            self.chat_window.focus_force()
+            return
+        self.chat_window = ChatWindow(
+            self,
+            self.yoimiya_chat,
+            self.deepseek_client,
+            resource_path("assets", "poses", "idle_close.png"),
+        )
+
+    def configure_api_key(self) -> None:
+        APIKeyDialog(self.root, self.deepseek_client)
+
+    def chat_context(self) -> str:
+        period_labels = {
+            "morning": "早上",
+            "afternoon": "下午",
+            "evening": "傍晚",
+            "night": "深夜",
+        }
+        return (
+            f"现在是{period_labels.get(self.current_time_period(), '今天')}。"
+            f"你与用户的好感度是 {self.needs.affection:.0%}，"
+            f"当前心情 {self.needs.mood:.0%}，精力 {self.needs.energy:.0%}。"
+            f"你现在处于“{self.current_action.label}”状态。"
+        )
+
+    def on_chat_reply(self, response: str) -> None:
+        self.needs.mood = min(1.0, self.needs.mood + 0.012)
+        self.needs.affection = min(1.0, self.needs.affection + 0.004)
+        self.show_expression("heart_blush", 0.9)
+        compact = response.replace("\n", " ").strip()
+        if len(compact) > 72:
+            compact = compact[:69].rstrip() + "……"
+        self.speak(compact, 5.0)
+
     def start_fireworks_game(self) -> None:
         self.game_active = True
         self.game_score = 0
@@ -1102,6 +1152,8 @@ class DesktopPetV2:
     def quit(self) -> None:
         self.save_settings()
         self.crash_guard.log("normal_exit")
+        if self.chat_window is not None and self.chat_window.winfo_exists():
+            self.chat_window.destroy()
         if self.control_panel is not None and self.control_panel.winfo_exists():
             self.control_panel.destroy()
         self.root.destroy()
