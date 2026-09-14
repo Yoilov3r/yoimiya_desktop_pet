@@ -162,6 +162,8 @@ class DesktopPetV2:
         self.demo_seconds = demo_seconds
         self.last_tick_at = time.monotonic()
         self.last_system_check = 0.0
+        self.last_wake_check = 0.0
+        self.wake_request_path = data_path("show.request")
         self.last_reminder_check = 0.0
         self.last_battery_warning = 0.0
         self.last_system_note = ""
@@ -607,15 +609,32 @@ class DesktopPetV2:
             self.hidden_by_fullscreen = True
             self.root.withdraw()
         elif self.hidden_by_fullscreen and not fullscreen:
-            self.hidden_by_fullscreen = False
-            self.root.deiconify()
-            self.root.attributes("-topmost", self.topmost)
+            self.show_pet()
 
         self.system_low_power = self.low_power_auto and (
             self.system.low_power_mode() or self.system.idle_seconds() > 75
         )
         self.last_system_note = (
             "省电低帧率" if self.system_low_power else ("全屏隐藏" if fullscreen else "状态正常")
+        )
+
+    def show_pet(self, reset_position: bool = False) -> None:
+        self.hidden_by_fullscreen = False
+        if reset_position or not self.position:
+            self.position = (
+                max(0, self.root.winfo_screenwidth() - self.window_size()[0] - 60),
+                max(0, self.root.winfo_screenheight() - self.window_size()[1] - 90),
+            )
+        self.position = self.clamp_position(*self.position)
+        self.root.deiconify()
+        self.root.attributes("-alpha", 0.98)
+        self.root.attributes("-topmost", True)
+        self.place_window()
+        self.root.lift()
+        if not self.topmost:
+            self.root.after(700, lambda: self.root.attributes("-topmost", False))
+        self.crash_guard.log(
+            f"show_pet x={self.position[0]} y={self.position[1]} topmost={self.topmost}"
         )
 
     def tick(self) -> None:
@@ -641,6 +660,12 @@ class DesktopPetV2:
         if now - self.last_system_check >= 5.0:
             self.last_system_check = now
             self.check_system_state()
+
+        if now - self.last_wake_check >= 1.0:
+            self.last_wake_check = now
+            if self.wake_request_path.exists():
+                self.wake_request_path.unlink(missing_ok=True)
+                self.show_pet()
 
         if now - self.last_reminder_check >= 1.0:
             self.last_reminder_check = now

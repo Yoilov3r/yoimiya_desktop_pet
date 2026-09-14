@@ -75,7 +75,7 @@ class CrashGuard:
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
-def acquire_single_instance():
+def acquire_single_instance(show_request_path: Path | None = None):
     if sys.platform != "win32":
         return object()
     kernel32 = ctypes.windll.kernel32
@@ -83,6 +83,12 @@ def acquire_single_instance():
     if not handle:
         return None
     if kernel32.GetLastError() == 183:
+        if show_request_path is not None:
+            try:
+                show_request_path.parent.mkdir(parents=True, exist_ok=True)
+                show_request_path.write_text(str(os.getpid()), encoding="utf-8")
+            except OSError:
+                pass
         user32 = ctypes.windll.user32
         window = user32.FindWindowW(None, "宵宫桌宠")
         if window:

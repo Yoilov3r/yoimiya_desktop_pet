@@ -15,7 +15,7 @@ from tkinter import messagebox
 
 from PIL import Image, ImageDraw, ImageFont, ImageTk
 
-from crash_guard import CrashGuard, acquire_single_instance
+from crash_guard import CrashGuard, acquire_single_instance, application_root
 from extra_actions import EXTRA_ACTIONS
 
 
@@ -699,7 +699,9 @@ def main() -> None:
         render_previews(args.preview_dir)
         return
 
-    instance = acquire_single_instance()
+    instance = acquire_single_instance(
+        application_root() / "data" / "show.request"
+    )
     if instance is None:
         guard.log("secondary_instance_exit")
         return
