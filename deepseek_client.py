@@ -117,6 +117,10 @@ class DeepSeekClient:
     def __init__(self, secret_store: SecretStore) -> None:
         self.secret_store = secret_store
         self.last_model = DEFAULT_MODEL
+        self.session = requests.Session()
+        # The desktop app connects to DeepSeek directly. Broken proxy settings
+        # inherited from launchers must not turn a valid API key into an error.
+        self.session.trust_env = False
 
     def set_api_key(self, api_key: str) -> None:
         self.secret_store.save(api_key)
@@ -130,7 +134,7 @@ class DeepSeekClient:
     def test_connection(self) -> str:
         return self.chat(
             [{"role": "user", "content": "请只回复：连接成功"}],
-            max_tokens=24,
+            max_tokens=64,
             temperature=0.0,
         )
 
@@ -147,19 +151,22 @@ class DeepSeekClient:
         errors: list[str] = []
         for model in dict.fromkeys((DEFAULT_MODEL, *FALLBACK_MODELS)):
             try:
-                response = requests.post(
+                payload = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                    "stream": False,
+                }
+                if model == "deepseek-flash":
+                    payload["thinking"] = {"type": "disabled"}
+                response = self.session.post(
                     API_URL,
                     headers={
                         "Authorization": f"Bearer {api_key}",
                         "Content-Type": "application/json",
                     },
-                    json={
-                        "model": model,
-                        "messages": messages,
-                        "temperature": temperature,
-                        "max_tokens": max_tokens,
-                        "stream": False,
-                    },
+                    json=payload,
                     timeout=(10, 60),
                 )
                 if response.status_code >= 400:
