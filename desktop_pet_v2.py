@@ -101,6 +101,8 @@ class DesktopPetV2:
         self.scale = float(self.settings.get("scale", 1.0))
         self.position = self.load_position()
         self.current_action = actions["idle"]
+        self.action_variant_index: dict[str, int] = {}
+        self.current_visual = "idle_1"
         self.bubble_text = ""
         self.bubble_until = 0.0
         self.frame = 0
@@ -277,6 +279,7 @@ class DesktopPetV2:
             "study",
             "daydream",
             "eat",
+            "drink",
             "cheer",
             "sleep",
             "stretch",
@@ -362,7 +365,9 @@ class DesktopPetV2:
 
     def load_pose(self, name: str) -> Image.Image:
         if name not in self.pose_cache:
-            path = resource_path("assets", "poses", f"{name}.png")
+            path = resource_path("assets", "action_variants", f"{name}.png")
+            if not path.exists():
+                path = resource_path("assets", "poses", f"{name}.png")
             self.pose_cache[name] = Image.open(path).convert("RGBA")
         return self.pose_cache[name]
 
@@ -419,18 +424,19 @@ class DesktopPetV2:
     def get_accessory_layer(
         self,
         action: str,
+        variant: int,
         frame_bucket: int,
         width: int,
         height: int,
     ) -> Image.Image:
         blink_active = time.monotonic() < self.blink_until
-        key = (action, frame_bucket, width, height, self.hover_region, blink_active)
+        key = (action, variant, frame_bucket, width, height, self.hover_region, blink_active)
         cached = self.accessory_cache.get(key)
         if cached is not None:
             self.accessory_cache.move_to_end(key)
             return cached
         layer = Image.new("RGBA", (BASE_WIDTH, BASE_HEIGHT), (0, 0, 0, 0))
-        draw_accessory(layer, action, frame_bucket * 10)
+        draw_accessory(layer, action, frame_bucket * 10, variant)
         if blink_active:
             draw_blink(layer, self.current_action.pose, frame_bucket * 10)
         if self.hover_region is not None and not self.dragging:
@@ -517,7 +523,7 @@ class DesktopPetV2:
             bubble, bubble_bottom = self.get_bubble_layer(self.bubble_text, width, height)
             scene.alpha_composite(bubble)
 
-        pose_source = self.load_pose(self.current_action.pose)
+        pose_source = self.load_pose(self.current_visual)
         target_height = (340 if bubble_bottom else 374) * self.scale
         target_width = 338 * self.scale
         ratio = min(target_width / pose_source.width, target_height / pose_source.height)
@@ -544,6 +550,7 @@ class DesktopPetV2:
         scene.alpha_composite(
             self.get_accessory_layer(
                 self.current_action.key,
+                self.action_variant_index.get(self.current_action.key, 0),
                 frame_bucket,
                 width,
                 height,
@@ -708,6 +715,8 @@ class DesktopPetV2:
 
     def change_action(self, key: str, text: str = "", speak_seconds: float = 4.5) -> None:
         self.current_action = self.actions[key]
+        self.action_variant_index[key] = random.randrange(2)
+        self.current_visual = f"{key}_{self.action_variant_index[key] + 1}"
         self.accessory_cache.clear()
         if text and not self.quiet_mode:
             self.speak(text, speak_seconds)

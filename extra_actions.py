@@ -1,4 +1,16 @@
 EXTRA_ACTIONS = {
+    "drink": {
+        "label": "喝水",
+        "pose": "welcome_mirror",
+        "lines": (
+            "咕嘟咕嘟……感觉清爽多了。",
+            "忙的时候也要记得喝水呀。",
+            "杯子里的水一晃，灯光都变得亮晶晶的。",
+            "补水完成，接下来继续加油。",
+        ),
+        "duration": (7, 12),
+        "weight": 2,
+    },
     "shy": {
         "label": "害羞",
         "pose": "idle_close",

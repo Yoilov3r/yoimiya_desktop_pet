@@ -124,7 +124,7 @@ def draw_sparkle(
     )
 
 
-def draw_accessory(image: Image.Image, action: str, frame: int) -> None:
+def draw_accessory(image: Image.Image, action: str, frame: int, variant: int = 0) -> None:
     draw = ImageDraw.Draw(image, "RGBA")
 
     if action == "study":
@@ -151,13 +151,30 @@ def draw_accessory(image: Image.Image, action: str, frame: int) -> None:
                 width=2,
             )
     elif action == "eat":
-        draw.ellipse((255, 431, 365, 490), fill=(73, 50, 41, 255), outline=INK, width=3)
-        draw.ellipse((246, 423, 374, 462), fill=(246, 245, 232, 255), outline=INK, width=3)
-        draw.chord((263, 426, 357, 458), 180, 360, fill=(255, 255, 250, 255), outline=INK, width=2)
-        draw.line((294, 385, 307, 429), fill=(116, 66, 43, 255), width=4)
-        draw.line((314, 382, 319, 428), fill=(116, 66, 43, 255), width=4)
-        for offset in (0, 14):
-            draw.arc((291 + offset, 375, 310 + offset, 408), 85, 270, fill=(238, 238, 226, 230), width=2)
+        if variant == 0:
+            draw.ellipse((255, 431, 365, 490), fill=(73, 50, 41, 255), outline=INK, width=3)
+            draw.ellipse((246, 423, 374, 462), fill=(246, 245, 232, 255), outline=INK, width=3)
+            draw.chord((263, 426, 357, 458), 180, 360, fill=(255, 255, 250, 255), outline=INK, width=2)
+            draw.line((294, 385, 307, 429), fill=(116, 66, 43, 255), width=4)
+            draw.line((314, 382, 319, 428), fill=(116, 66, 43, 255), width=4)
+            for offset in (0, 14):
+                draw.arc((291 + offset, 375, 310 + offset, 408), 85, 270, fill=(238, 238, 226, 230), width=2)
+        else:
+            draw.ellipse((247, 438, 367, 484), fill=(255, 245, 224, 255), outline=INK, width=3)
+            for index, color in enumerate(((248, 164, 91, 255), (240, 220, 194, 255), (244, 133, 94, 255))):
+                x = 276 + index * 31
+                draw.ellipse((x - 14, 410 - index * 2, x + 14, 438 - index * 2), fill=color, outline=INK, width=2)
+            draw.line((267, 403, 330, 446), fill=(126, 75, 49, 255), width=4)
+    elif action == "drink":
+        if variant == 0:
+            draw.rounded_rectangle((270, 405, 356, 479), radius=10, fill=(247, 249, 242, 255), outline=INK, width=3)
+            draw.ellipse((275, 402, 351, 423), fill=(229, 199, 155, 255), outline=INK, width=3)
+            draw.arc((341, 429, 379, 466), 270, 90, fill=INK, width=5)
+            draw.arc((261, 385, 286, 408), 80, 260, fill=(234, 241, 231, 210), width=2)
+        else:
+            draw.polygon(((276, 395), (352, 395), (343, 482), (285, 482)), fill=(140, 207, 230, 235), outline=INK)
+            draw.rectangle((286, 379, 338, 402), fill=(246, 216, 147, 255), outline=INK, width=2)
+            draw.line((342, 382, 369, 428), fill=(238, 124, 92, 255), width=5)
     elif action == "daydream":
         drift = math.sin(frame * 0.06) * 4
         draw.ellipse((292, 235 + drift, 330, 257 + drift), fill=(255, 248, 232, 255), outline=INK, width=2)
@@ -170,6 +187,8 @@ def draw_accessory(image: Image.Image, action: str, frame: int) -> None:
         draw.text((309, 265 - drift), "Z", font=pick_font(25, bold=True), fill=INK)
         draw.text((333, 235 - drift), "Z", font=pick_font(20, bold=True), fill=ORANGE)
         draw.text((351, 212 - drift), "Z", font=pick_font(16, bold=True), fill=GOLD)
+        if variant == 1:
+            draw.rounded_rectangle((252, 409, 369, 480), radius=28, fill=(158, 184, 226, 145), outline=(92, 109, 151, 200), width=3)
     elif action == "cheer":
         colors = (ORANGE, GOLD, (81, 147, 184, 255), (238, 138, 112, 255))
         for index in range(18):
