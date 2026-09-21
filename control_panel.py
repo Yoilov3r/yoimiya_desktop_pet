@@ -25,6 +25,7 @@ class ControlPanel(tk.Toplevel):
             "window_perch": tk.BooleanVar(value=pet.window_perch),
             "wander": tk.BooleanVar(value=pet.wander),
             "seasonal_effects": tk.BooleanVar(value=pet.seasonal_effects),
+            "reaction_cards_enabled": tk.BooleanVar(value=pet.reaction_cards_enabled),
         }
         self.size_var = tk.DoubleVar(value=pet.scale)
         self.motion_var = tk.IntVar(value=pet.motion_interval)
@@ -94,6 +95,7 @@ class ControlPanel(tk.Toplevel):
             ("window_perch", "尝试停在当前窗口上沿"),
             ("wander", "偶尔在桌面散步"),
             ("seasonal_effects", "季节小装饰"),
+            ("reaction_cards_enabled", "动作场景卡"),
         )
         for index, (key, label) in enumerate(labels):
             checkbox = tk.Checkbutton(
@@ -136,7 +138,7 @@ class ControlPanel(tk.Toplevel):
             "padx": 10,
             "pady": 6,
         }
-        tk.Button(actions, text="点心", command=self.pet.feed, **button_style).pack(side="left", padx=(0, 6))
+        tk.Button(actions, text="喂食", command=self.pet.open_feeding_shop, **button_style).pack(side="left", padx=(0, 6))
         tk.Button(actions, text="饮水", command=self.pet.drink, **button_style).pack(side="left", padx=6)
         tk.Button(actions, text="休息", command=lambda: self.pet.manual_action("sleep"), **button_style).pack(side="left", padx=6)
         tk.Button(actions, text="烟花", command=self.pet.start_fireworks_game, **button_style).pack(side="left", padx=6)
@@ -244,6 +246,7 @@ class ControlPanel(tk.Toplevel):
             "window_perch": "空闲时我会试着找窗口边沿。" if value else "不再停留到其他窗口上。",
             "wander": "偶尔去桌面别处转转。" if value else "我会待在当前的位置。",
             "seasonal_effects": "换上这个季节的小装饰。" if value else "收起季节装饰。",
+            "reaction_cards_enabled": "动作时会弹出场景卡。" if value else "动作场景卡已关闭。",
         }
         return messages.get(key, "设置已更新。")
 
@@ -275,9 +278,10 @@ class ControlPanel(tk.Toplevel):
         system = self.pet.last_system_note or "状态正常"
         self.status_var.set(
             f"Lv.{needs.level}   好感 {needs.affection:.0%}   "
-            f"心情 {needs.mood:.0%}   精力 {needs.energy:.0%}\n"
+            f"幸福 {needs.mood:.0%}   精力 {needs.energy:.0%}\n"
             f"饱腹 {needs.fullness:.0%}   专注 {needs.focus:.0%}   "
-            f"清洁 {needs.cleanliness:.0%}   健康 {needs.health:.0%}\n"
+            f"知识 {needs.knowledge:.0%}   清洁 {needs.cleanliness:.0%}   "
+            f"健康 {needs.health:.0%}\n"
             f"点心 {needs.treats}   饮水 {needs.drinks}   金币 {needs.coins}   "
             f"互动 {self.pet.interaction_count}\n"
             f"烟花游戏 {game}   系统：{system}"

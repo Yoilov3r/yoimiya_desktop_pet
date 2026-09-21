@@ -16,7 +16,7 @@ ACTION_SOURCES = {
     "eat": ("welcome", "welcome_mirror"),
     "drink": ("welcome_mirror", "welcome"),
     "daydream": ("idle", "idle_mirror"),
-    "cheer": ("cheer", "cheer_mirror"),
+    "cheer": ("welcome", "welcome_mirror"),
     "welcome": ("welcome", "welcome_mirror"),
     "sleep": ("wink", "wink_mirror"),
     "stretch": ("welcome", "welcome_mirror"),

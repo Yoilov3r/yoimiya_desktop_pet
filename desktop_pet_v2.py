@@ -13,14 +13,18 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox
 
-from PIL import Image, ImageFilter, ImageTk
+from PIL import Image, ImageDraw, ImageFilter, ImageTk
 
 from behavior import DialogueEngine, PetNeeds
 from chat_window import APIKeyDialog, ChatWindow
 from control_panel import ControlPanel
 from crash_guard import CrashGuard
 from deepseek_client import DeepSeekClient, SecretStore
+from feeding_window import FeedingWindow
+from items import SHOP_ITEMS
 from particles import ParticleSystem, draw_seasonal_ambient
+from reaction_cards import choose_card_name
+from reaction_window import ReactionWindow
 from reminders import ReminderManager
 from rendering import (
     draw_accessory,
@@ -127,12 +131,20 @@ class DesktopPetV2:
         self.wander = bool(self.settings.get("wander", False))
         self.seasonal_effects = bool(self.settings.get("seasonal_effects", True))
         self.motion_interval = int(self.settings.get("motion_interval", 80))
-        if int(self.settings.get("config_version", 1)) < 3:
+        if int(self.settings.get("config_version", 1)) < 4:
             self.motion_interval = 33
         self.water_minutes = int(self.settings.get("water_minutes", 45))
         self.reminders_enabled = bool(self.settings.get("reminders_enabled", False))
+        self.reaction_cards_enabled = bool(
+            self.settings.get("reaction_cards_enabled", True)
+        )
 
         self.needs = PetNeeds.from_dict(self.settings.get("needs"))
+        self.inventory = {
+            str(key): max(0, int(value))
+            for key, value in self.settings.get("inventory", {}).items()
+            if key in SHOP_ITEMS
+        }
         self.dialogue = DialogueEngine(
             {key: action.lines for key, action in actions.items()},
             data_path("custom_dialogues.json"),
@@ -148,6 +160,8 @@ class DesktopPetV2:
             data_path("chat_history.json"),
         )
         self.chat_window: ChatWindow | None = None
+        self.feeding_window: FeedingWindow | None = None
+        self.reaction_window: ReactionWindow | None = None
 
         self.photo: ImageTk.PhotoImage | None = None
         self.canvas_item: int | None = None
@@ -177,6 +191,9 @@ class DesktopPetV2:
         self.game_started_at = 0.0
         self.next_blink_at = time.monotonic() + random.uniform(2.5, 5.0)
         self.blink_until = 0.0
+        self.waiting_until = 0.0
+        self.next_idle_emote = time.monotonic() + random.uniform(18, 36)
+        self.next_reaction_card = 0.0
         self.control_panel: ControlPanel | None = None
 
         self.wander_target: tuple[int, int] | None = None
@@ -238,11 +255,13 @@ class DesktopPetV2:
                 "wander": self.wander,
                 "seasonal_effects": self.seasonal_effects,
                 "motion_interval": self.motion_interval,
-                "config_version": 3,
+                "config_version": 4,
                 "water_minutes": self.water_minutes,
                 "reminders_enabled": self.reminders_enabled,
+                "reaction_cards_enabled": self.reaction_cards_enabled,
                 "interaction_count": self.interaction_count,
                 "needs": self.needs.to_dict(),
+                "inventory": self.inventory,
             }
             temporary = path.with_suffix(".tmp")
             temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -270,7 +289,7 @@ class DesktopPetV2:
         menu.add_command(label="填入deepseekAPI KEY", command=self.configure_api_key)
         menu.add_separator()
         menu.add_command(label="打开控制中心", command=self.open_control_center)
-        menu.add_command(label="给点点心", command=self.feed)
+        menu.add_command(label="喂食", command=self.open_feeding_shop)
         menu.add_command(label="喝口水", command=self.drink)
         menu.add_command(label="烟花小游戏", command=self.start_fireworks_game)
         menu.add_separator()
@@ -583,6 +602,27 @@ class DesktopPetV2:
         if self.seasonal_effects:
             draw_seasonal_ambient(scene, self.frame, self.scale)
         self.particles.draw(scene, self.scale)
+        if time.monotonic() < self.waiting_until:
+            draw = ImageDraw.Draw(scene, "RGBA")
+            center_x = width * 0.73
+            center_y = height * 0.22
+            radius = 18 * self.scale
+            for index in range(4):
+                angle = self.frame * 0.095 + index * math.tau / 4
+                dot_x = center_x + math.cos(angle) * radius
+                dot_y = center_y + math.sin(angle) * radius
+                dot_size = (4 + index % 2 * 2) * self.scale
+                draw.ellipse(
+                    (
+                        dot_x - dot_size,
+                        dot_y - dot_size,
+                        dot_x + dot_size,
+                        dot_y + dot_size,
+                    ),
+                    fill=(245, 171, 60, 225),
+                    outline=(91, 47, 37, 220),
+                    width=max(1, round(self.scale)),
+                )
         return scene
 
     def draw(self) -> None:
@@ -664,6 +704,13 @@ class DesktopPetV2:
             self.blink_until = now + 0.14
             self.next_blink_at = now + random.uniform(2.8, 6.4)
 
+        if now >= self.next_idle_emote:
+            self.next_idle_emote = now + random.uniform(22, 48)
+            self.show_expression(
+                random.choice(("spark_cluster", "heart_blush", "music_notes")),
+                1.0,
+            )
+
         if now - self.last_system_check >= 5.0:
             self.last_system_check = now
             self.check_system_state()
@@ -718,6 +765,10 @@ class DesktopPetV2:
         self.action_variant_index[key] = random.randrange(2)
         self.current_visual = f"{key}_{self.action_variant_index[key] + 1}"
         self.accessory_cache.clear()
+        now = time.monotonic()
+        if now >= self.next_reaction_card and random.random() < 0.34:
+            self.next_reaction_card = now + 15.0
+            self.root.after(80, lambda action=key: self.show_reaction_card(action))
         if text and not self.quiet_mode:
             self.speak(text, speak_seconds)
         elif text and self.game_active:
@@ -778,6 +829,7 @@ class DesktopPetV2:
             "好吃！感觉又能继续做很多事了。",
         )
         self.show_expression("heart_blush", 1.0)
+        self.show_reaction_card("eat")
         self.save_settings()
 
     def drink(self) -> None:
@@ -788,7 +840,76 @@ class DesktopPetV2:
         self.particles.emit(BASE_WIDTH * 0.68, BASE_HEIGHT * 0.67, 10, 42)
         self.change_action("welcome", "咕嘟咕嘟……感觉清爽多了。")
         self.show_expression("spark_cluster", 0.8)
+        self.show_reaction_card("drink")
         self.save_settings()
+
+    def open_feeding_shop(self) -> None:
+        if self.feeding_window is not None and self.feeding_window.winfo_exists():
+            self.feeding_window.lift()
+            self.feeding_window.focus_force()
+            return
+        self.feeding_window = FeedingWindow(self)
+
+    def buy_item(self, key: str) -> tuple[object, str]:
+        item = SHOP_ITEMS[key]
+        if self.needs.coins < item.price:
+            return item, f"金币不够啦，{item.name}需要 {item.price} 金币。"
+        self.needs.coins -= item.price
+        self.inventory[key] = self.inventory.get(key, 0) + 1
+        self.particles.emit(BASE_WIDTH * 0.68, BASE_HEIGHT * 0.62, 8, 38)
+        self.save_settings()
+        return item, f"买到 {item.name} 啦，库存 +1。"
+
+    def use_item(self, key: str) -> tuple[object, str]:
+        item = SHOP_ITEMS[key]
+        count = self.inventory.get(key, 0)
+        if count <= 0:
+            return item, f"仓库里还没有 {item.name}，先买一个吧。"
+        self.inventory[key] = count - 1
+        self.needs.apply_item_effects(item.effects)
+        self.needs.experience += 3 if item.category == "书籍" else 2
+        line = self.dialogue.choose_nonrepeating(f"item:{key}", item.reactions)
+        action_key = item.card_group
+        self.change_action(action_key)
+        self.show_expression(
+            {
+                "eat": "flower_burst",
+                "drink": "spark_cluster",
+                "study": "question_mark",
+                "sleep": "heart_blush",
+                "shy": "heart_blush",
+                "cheer": "firework",
+                "welcome": "spark_cluster",
+                "daydream": "music_notes",
+            }.get(action_key, "spark_cluster"),
+            1.0,
+        )
+        self.show_reaction_card(action_key)
+        self.speak(line, 4.5)
+        self.save_settings()
+        return item, line
+
+    def show_reaction_card(self, action_key: str) -> None:
+        if not self.reaction_cards_enabled or self.hidden_by_fullscreen:
+            return
+        if self.reaction_window is not None and self.reaction_window.winfo_exists():
+            return
+        card_name = choose_card_name(action_key)
+        if not card_name:
+            return
+        card_path = resource_path("assets", "reaction_cards", f"{card_name}.png")
+        if not card_path.exists():
+            return
+        try:
+            self.reaction_window = ReactionWindow(self, card_path)
+        except Exception as error:
+            self.crash_guard.log_error("reaction_card", error)
+            self.reaction_window = None
+
+    def set_waiting(self, active: bool) -> None:
+        self.waiting_until = time.monotonic() + 18.0 if active else 0.0
+        if active:
+            self.speak("让我想想……", 18.0)
 
     def show_growth(self) -> None:
         level = self.needs.level
@@ -797,7 +918,8 @@ class DesktopPetV2:
             f"等级：Lv.{level}\n"
             f"经验：{self.needs.experience:.0f}\n"
             f"好感度：{self.needs.affection:.0%}\n"
-            f"心情：{self.needs.mood:.0%}\n"
+            f"幸福感：{self.needs.mood:.0%}\n"
+            f"知识：{self.needs.knowledge:.0%}\n"
             f"清洁度：{self.needs.cleanliness:.0%}\n"
             f"健康：{self.needs.health:.0%}\n"
             f"金币：{self.needs.coins}\n"

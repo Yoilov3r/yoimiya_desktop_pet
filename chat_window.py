@@ -327,6 +327,7 @@ class ChatWindow(tk.Toplevel):
         self.send_button.configure(state="disabled")
         self.request_running = True
         self.pet.show_expression("music_notes", 0.9)
+        self.pet.set_waiting(True)
 
         def worker() -> None:
             try:
@@ -338,6 +339,7 @@ class ChatWindow(tk.Toplevel):
         threading.Thread(target=worker, daemon=True).start()
 
     def finish_reply(self, response: str) -> None:
+        self.pet.set_waiting(False)
         self.request_running = False
         self.send_button.configure(state="normal")
         self.status_var.set("已连接")
@@ -345,6 +347,7 @@ class ChatWindow(tk.Toplevel):
         self.pet.on_chat_reply(response)
 
     def fail_reply(self, error: Exception) -> None:
+        self.pet.set_waiting(False)
         self.request_running = False
         self.send_button.configure(state="normal")
         message = str(error)

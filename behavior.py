@@ -18,6 +18,7 @@ class PetNeeds:
     mood: float = 0.78
     fullness: float = 0.72
     focus: float = 0.66
+    knowledge: float = 0.25
     affection: float = 0.12
     experience: float = 0.0
     cleanliness: float = 0.94
@@ -36,6 +37,7 @@ class PetNeeds:
             "mood",
             "fullness",
             "focus",
+            "knowledge",
             "affection",
             "experience",
             "cleanliness",
@@ -138,10 +140,18 @@ class PetNeeds:
         self.experience += 2
         return True
 
+    def apply_item_effects(self, effects: Mapping[str, float]) -> None:
+        for key, value in effects.items():
+            if key == "coins":
+                self.coins = max(0, self.coins + int(value))
+            elif hasattr(self, key):
+                current = float(getattr(self, key))
+                setattr(self, key, clamp(current + float(value)))
+
     def status_summary(self) -> str:
         return (
             f"Lv.{self.level}  好感 {self.affection:.0%}  "
-            f"心情 {self.mood:.0%}  精力 {self.energy:.0%}"
+            f"幸福 {self.mood:.0%}  知识 {self.knowledge:.0%}"
         )
 
     def important_note(self, action_key: str) -> str | None:
