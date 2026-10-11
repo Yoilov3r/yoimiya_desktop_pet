@@ -15,6 +15,7 @@ from tkinter import messagebox
 
 from PIL import Image, ImageDraw, ImageFilter, ImageTk
 
+from animation_director import AnimationDirector, IdleCue
 from behavior import DialogueEngine, PetNeeds
 from chat_window import APIKeyDialog, ChatWindow
 from control_panel import ControlPanel
@@ -24,6 +25,7 @@ from feeding_window import FeedingWindow
 from items import SHOP_ITEMS
 from particles import ParticleSystem, draw_seasonal_ambient
 from reaction_cards import choose_card_name
+from reaction_director import ReactionDirector
 from reaction_window import ReactionWindow
 from reminders import ReminderManager
 from rendering import (
@@ -140,6 +142,8 @@ class DesktopPetV2:
         )
 
         self.needs = PetNeeds.from_dict(self.settings.get("needs"))
+        if int(self.settings.get("config_version", 1)) < 4:
+            self.needs.coins = max(self.needs.coins, 30)
         self.inventory = {
             str(key): max(0, int(value))
             for key, value in self.settings.get("inventory", {}).items()
@@ -194,6 +198,12 @@ class DesktopPetV2:
         self.waiting_until = 0.0
         self.next_idle_emote = time.monotonic() + random.uniform(18, 36)
         self.next_reaction_card = 0.0
+        self.idle_director = AnimationDirector()
+        self.reaction_director = ReactionDirector()
+        self.idle_cue = IdleCue("breathe", 0.0, 0.0, 0.0, 0.0, 1.0)
+        self.previous_visual = ""
+        self.transition_started_at = 0.0
+        self.transition_duration = 0.22
         self.control_panel: ControlPanel | None = None
 
         self.wander_target: tuple[int, int] | None = None
@@ -396,8 +406,19 @@ class DesktopPetV2:
         target_width: int,
         target_height: int,
         angle_bucket: int,
+        extra_angle: float = 0.0,
     ) -> Image.Image:
-        key = (name, target_width, target_height, angle_bucket)
+        angle = (
+            math.sin(angle_bucket * 0.16) * 0.38
+            if angle_bucket
+            else 0.0
+        ) + extra_angle
+        key = (
+            name,
+            target_width,
+            target_height,
+            round(angle * 2) / 2,
+        )
         cached = self.scaled_pose_cache.get(key)
         if cached is not None:
             self.scaled_pose_cache.move_to_end(key)
@@ -410,8 +431,7 @@ class DesktopPetV2:
         alpha = resized.getchannel("A")
         sharpened = resized.filter(ImageFilter.UnsharpMask(radius=0.9, percent=82, threshold=2))
         sharpened.putalpha(alpha)
-        if angle_bucket:
-            angle = math.sin(angle_bucket * 0.16) * 0.38
+        if abs(angle) >= 0.05:
             sharpened = sharpened.rotate(
                 angle,
                 resample=Image.Resampling.BICUBIC,
@@ -536,6 +556,8 @@ class DesktopPetV2:
         scene = Image.new("RGBA", (width, height), (0, 0, 0, 0))
         sprite_is_rotating = self.current_action.key in {"idle", "daydream"} and not self.system_low_power
         angle_bucket = round(math.sin(self.frame * 0.045) * 4) if sprite_is_rotating else 0
+        cue = self.idle_cue
+        reaction = self.reaction_director.sample()
 
         bubble_bottom = 0
         if self.bubble_text and time.monotonic() < self.bubble_until:
@@ -551,18 +573,50 @@ class DesktopPetV2:
         if not self.system_low_power:
             breath = 1.0 + math.sin(self.frame * 0.055) * 0.004
             target_pose_height = max(2, round(target_pose_height * breath / 2) * 2)
+        target_pose_width = max(2, round(target_pose_width * reaction.scale_x / 2) * 2)
+        target_pose_height = max(2, round(target_pose_height * reaction.scale_y / 2) * 2)
+
+        transition_progress = 1.0
+        elapsed_transition = time.monotonic() - self.transition_started_at
+        if elapsed_transition < self.transition_duration:
+            transition_progress = max(0.0, elapsed_transition / self.transition_duration)
+            pop = 0.94 + math.sin(transition_progress * math.pi * 0.5) * 0.06
+            target_pose_width = max(2, round(target_pose_width * pop / 2) * 2)
+            target_pose_height = max(2, round(target_pose_height * pop / 2) * 2)
+
+        extra_angle = reaction.angle
+        if self.current_action.key in {"idle", "daydream"}:
+            extra_angle += cue.rotation
 
         pose = self.get_scaled_pose(
-            self.current_action.pose,
+            self.current_visual,
             target_pose_width,
             target_pose_height,
             angle_bucket,
+            extra_angle,
         )
+        if transition_progress < 1.0:
+            pose = pose.copy()
+            pose_alpha = pose.getchannel("A").point(
+                lambda value: round(value * (0.45 + transition_progress * 0.55))
+            )
+            pose.putalpha(pose_alpha)
         bob = math.sin(self.frame * 0.05) * (1.2 if self.system_low_power else 2.0)
         if self.current_action.key in {"study", "sleep"}:
             bob *= 0.35
-        x = (width - pose.width) // 2
-        y = height - pose.height - round(12 * self.scale) + round(bob * self.scale)
+        x = (
+            (width - pose.width) // 2
+            + round(cue.sway_offset * self.scale)
+            + round(reaction.offset_x * self.scale)
+            + round(reaction.shake_x * self.scale)
+        )
+        y = (
+            height
+            - pose.height
+            - round(12 * self.scale)
+            + round((bob + cue.bob_offset) * self.scale)
+            + round(reaction.offset_y * self.scale)
+        )
         scene.alpha_composite(pose, (x, y))
 
         frame_bucket = self.frame // 8
@@ -704,11 +758,24 @@ class DesktopPetV2:
             self.blink_until = now + 0.14
             self.next_blink_at = now + random.uniform(2.8, 6.4)
 
-        if now >= self.next_idle_emote:
-            self.next_idle_emote = now + random.uniform(22, 48)
-            self.show_expression(
-                random.choice(("spark_cluster", "heart_blush", "music_notes")),
-                1.0,
+        self.idle_cue, idle_effect = self.idle_director.update(
+            self.needs.mood,
+            self.needs.energy,
+            self.needs.affection,
+            self.current_time_period(),
+        )
+        if idle_effect:
+            effect_positions = {
+                "hearts": (0.50, 0.42),
+                "zzz": (0.72, 0.30),
+                "stars": (0.58, 0.37),
+                "sparkles": (0.63, 0.30),
+            }
+            effect_x, effect_y = effect_positions.get(idle_effect, (0.60, 0.35))
+            self.particles.emit_effect(
+                idle_effect,
+                BASE_WIDTH * effect_x,
+                BASE_HEIGHT * effect_y,
             )
 
         if now - self.last_system_check >= 5.0:
@@ -761,11 +828,34 @@ class DesktopPetV2:
         self.root.after(delay, self.tick)
 
     def change_action(self, key: str, text: str = "", speak_seconds: float = 4.5) -> None:
+        previous_key = self.current_action.key
         self.current_action = self.actions[key]
         self.action_variant_index[key] = random.randrange(2)
+        if previous_key != key:
+            self.previous_visual = self.current_visual
+            self.transition_started_at = time.monotonic()
         self.current_visual = f"{key}_{self.action_variant_index[key] + 1}"
         self.accessory_cache.clear()
         now = time.monotonic()
+        effect_positions = {
+            "eat": ("crumbs", 0.62, 0.72),
+            "drink": ("water", 0.72, 0.66),
+            "sleep": ("zzz", 0.72, 0.30),
+            "study": ("sparkles", 0.60, 0.39),
+            "daydream": ("sparkles", 0.62, 0.31),
+            "cheer": ("confetti", 0.50, 0.47),
+            "welcome": ("stars", 0.55, 0.38),
+            "stretch": ("stars", 0.55, 0.46),
+            "shy": ("hearts", 0.52, 0.42),
+            "look_fireworks": ("confetti", 0.63, 0.27),
+        }
+        if key in effect_positions:
+            effect, effect_x, effect_y = effect_positions[key]
+            self.particles.emit_effect(
+                effect,
+                BASE_WIDTH * effect_x,
+                BASE_HEIGHT * effect_y,
+            )
         if now >= self.next_reaction_card and random.random() < 0.34:
             self.next_reaction_card = now + 15.0
             self.root.after(80, lambda action=key: self.show_reaction_card(action))
@@ -883,6 +973,20 @@ class DesktopPetV2:
                 "daydream": "music_notes",
             }.get(action_key, "spark_cluster"),
             1.0,
+        )
+        self.particles.emit_effect(
+            {
+                "eat": "crumbs",
+                "drink": "water",
+                "study": "sparkles",
+                "sleep": "zzz",
+                "shy": "hearts",
+                "cheer": "confetti",
+                "welcome": "stars",
+                "daydream": "sparkles",
+            }.get(action_key, "stars"),
+            BASE_WIDTH * 0.62,
+            BASE_HEIGHT * (0.72 if action_key == "eat" else 0.40),
         )
         self.show_reaction_card(action_key)
         self.speak(line, 4.5)
@@ -1082,6 +1186,12 @@ class DesktopPetV2:
             self.place_window()
             drag_duration = time.monotonic() - self.drag_started_at
             if drag_duration > 0.55 and random.random() < 0.42:
+                self.reaction_director.trigger("drag")
+                self.particles.emit_effect(
+                    "sweat",
+                    BASE_WIDTH * 0.68,
+                    BASE_HEIGHT * 0.28,
+                )
                 self.show_expression(
                     random.choice(("sweat_drop", "question_mark", "anger_mark")),
                     0.9,
@@ -1117,7 +1227,8 @@ class DesktopPetV2:
             self.click_times.clear()
             self.needs.mood = max(0.0, self.needs.mood - 0.015)
             self.show_expression("anger_mark", 0.75)
-            self.particles.emit(BASE_WIDTH * 0.62, BASE_HEIGHT * 0.34, 9, 44)
+            self.reaction_director.trigger("rapid")
+            self.particles.emit_effect("anger", BASE_WIDTH * 0.62, BASE_HEIGHT * 0.34)
             self.speak(
                 self.dialogue.interaction_line(
                     "rapid",
@@ -1140,6 +1251,7 @@ class DesktopPetV2:
         effect = effects.get(region)
         if effect:
             self.show_expression(effect, 0.85)
+        reaction_effect = self.reaction_director.trigger(region)
         mood_gain = {
             "face": 0.05,
             "hair": 0.025,
@@ -1156,11 +1268,12 @@ class DesktopPetV2:
                 f"好感成长到 Lv.{self.needs.level} 啦！我会继续陪着你的。",
                 5.0,
             )
-        self.particles.emit(
-            BASE_WIDTH * (0.72 if region == "hand" else 0.52),
-            BASE_HEIGHT * (0.7 if region == "hand" else 0.4),
-            9,
-            48,
+        effect_x = 0.72 if region == "hand" else 0.52
+        effect_y = 0.70 if region == "hand" else 0.40
+        self.particles.emit_effect(
+            reaction_effect or "stars",
+            BASE_WIDTH * effect_x,
+            BASE_HEIGHT * effect_y,
         )
         self.speak(self.click_line(region))
         self.save_settings()
