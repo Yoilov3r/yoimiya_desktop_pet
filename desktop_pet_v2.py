@@ -189,6 +189,7 @@ class DesktopPetV2:
         self.last_system_note = ""
         self.system_low_power = False
         self.hidden_by_fullscreen = False
+        self.fullscreen_hide_suppressed_until = 0.0
 
         self.game_active = False
         self.game_score = 0
@@ -631,7 +632,7 @@ class DesktopPetV2:
         )
         if self.active_expression and time.monotonic() < self.expression_until:
             effect = self.load_expression(self.active_expression)
-            effect_size = max(80, round(230 * self.scale))
+            effect_size = max(76, round(190 * self.scale))
             effect = effect.resize((effect_size, effect_size), Image.Resampling.LANCZOS)
             positions = {
                 "heart_blush": (0.51, 0.43),
@@ -706,9 +707,16 @@ class DesktopPetV2:
 
     def check_system_state(self) -> None:
         fullscreen = self.system.is_fullscreen()
-        if self.fullscreen_hide and fullscreen and not self.hidden_by_fullscreen:
+        hide_suppressed = time.monotonic() < self.fullscreen_hide_suppressed_until
+        if (
+            self.fullscreen_hide
+            and fullscreen
+            and not hide_suppressed
+            and not self.hidden_by_fullscreen
+        ):
             self.hidden_by_fullscreen = True
             self.root.withdraw()
+            self.crash_guard.log("hidden_by_fullscreen")
         elif self.hidden_by_fullscreen and not fullscreen:
             self.show_pet()
 
@@ -721,6 +729,7 @@ class DesktopPetV2:
 
     def show_pet(self, reset_position: bool = False) -> None:
         self.hidden_by_fullscreen = False
+        self.fullscreen_hide_suppressed_until = time.monotonic() + 600.0
         if reset_position or not self.position:
             self.position = (
                 max(0, self.root.winfo_screenwidth() - self.window_size()[0] - 60),
@@ -728,14 +737,21 @@ class DesktopPetV2:
             )
         self.position = self.clamp_position(*self.position)
         self.root.deiconify()
+        self.root.state("normal")
         self.root.attributes("-alpha", 0.98)
         self.root.attributes("-topmost", True)
         self.place_window()
         self.root.lift()
+        try:
+            self.root.update_idletasks()
+        except tk.TclError:
+            pass
         if not self.topmost:
             self.root.after(700, lambda: self.root.attributes("-topmost", False))
         self.crash_guard.log(
-            f"show_pet x={self.position[0]} y={self.position[1]} topmost={self.topmost}"
+            f"show_pet x={self.position[0]} y={self.position[1]} "
+            f"topmost={self.topmost} state={self.root.state()} "
+            f"viewable={self.root.winfo_viewable()}"
         )
 
     def tick(self) -> None:
@@ -963,7 +979,7 @@ class DesktopPetV2:
         self.change_action(action_key)
         self.show_expression(
             {
-                "eat": "flower_burst",
+                "eat": "heart_blush",
                 "drink": "spark_cluster",
                 "study": "question_mark",
                 "sleep": "heart_blush",

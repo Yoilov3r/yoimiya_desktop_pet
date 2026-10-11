@@ -104,6 +104,14 @@ class SystemAwareness:
     def is_fullscreen(self) -> bool:
         if sys.platform != "win32":
             return False
+        hwnd = ctypes.windll.user32.GetForegroundWindow()
+        if not hwnd:
+            return False
+        # Maximized ordinary windows also cover most of the monitor. Only
+        # treat borderless windows such as fullscreen games as fullscreen.
+        style = ctypes.windll.user32.GetWindowLongW(hwnd, -16)
+        if style & 0x00C00000:
+            return False
         rect = self.foreground_rect()
         if rect is None or rect.width < 320 or rect.height < 240:
             return False
